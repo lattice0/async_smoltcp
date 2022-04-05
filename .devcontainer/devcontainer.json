@@ -1,0 +1,10 @@
+{
+	"name": "Rust environment",
+	"dockerFile": "Dockerfile",
+	"extensions": [
+		"matklad.rust-analyzer"
+	],
+    "containerEnv": {
+        "VPN_PROFILES_DIR": "openvpn_profiles",
+    }
+}

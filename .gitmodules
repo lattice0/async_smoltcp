@@ -1,0 +1,6 @@
+[submodule "async_smoltcp"]
+	path = async_smoltcp
+	url = https://github.com/lattice0/async_smoltcp
+[submodule "true_libopenvpn3_rust"]
+	path = true_libopenvpn3_rust
+	url = https://github.com/lattice0/true_libopenvpn3_rust
