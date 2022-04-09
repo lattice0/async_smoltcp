@@ -3,16 +3,10 @@ use core::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::Mutex;
-use futures::executor::block_on;
 use tokio::io::{AsyncRead, AsyncWrite};
 use hyper::service::Service;
 use hyper::client::connect::{Connection, Connected};
 use async_smoltcp::AsyncRW;
-
-//pub type OnPollRead = Arc<dyn Fn(&mut Context<'_>, &mut tokio::io::ReadBuf<'_>) -> Poll<std::io::Result<()>> + Send + Sync>;
-//pub type OnPollWrite = Arc<dyn Fn(&mut Context<'_>, &[u8]) -> Poll<core::result::Result<usize, std::io::Error>> + Send + Sync>;
-
-//trait AsyncRW: tokio::io::AsyncRead + tokio::io::AsyncWrite {}
 
 #[derive(Clone)]
 pub struct AsyncTransporter {
@@ -41,9 +35,6 @@ impl Service<hyper::Uri> for AsyncTransporter {
     }
 }
 
-//TODO: verify this
-//unsafe impl Send for AsyncTransporter {}
-
 impl AsyncTransporter {
     pub fn new(stream: Arc<Mutex<dyn AsyncRW + Send + Sync + Unpin>>) -> AsyncTransporter {
         AsyncTransporter{
@@ -61,9 +52,6 @@ impl Connection for AsyncTransporter {
 pub struct CustomResponse {
     stream: Arc<Mutex<dyn AsyncRW + Send + Sync + Unpin>>,
 }
-
-//TODO: verify this!
-//unsafe impl Send for CustomResponse {}
 
 impl Connection for CustomResponse {
     fn connected(&self) -> Connected {
@@ -103,8 +91,7 @@ impl AsyncWrite for CustomResponse {
         self: Pin<&mut Self>,
         cx: &mut Context<'_>
     ) -> Poll<Result<(), std::io::Error>>
-    {   //let pinned = Pin::new(self);
-        //let a = &mut *self.stream.lock().unwrap();
+    {
         Pin::new(&mut *self.stream.try_lock().expect(E)).poll_shutdown(cx)
     }
 }

@@ -1,17 +1,11 @@
-# Hyper VPN with OpenVPN3 in userspace mode (no tun/tap interface)
+# Async smoltcp
 
-An example of merging the hyper http library with https://github.com/lattice0/true_libopenvpn3_rust and https://github.com/lattice0/async_smoltcp
+In development. Implements tokio's `AsyncWrite` and `AsyndRead` for smoltcp, and wraps everything in a struct with support for tun, tap and virtual tun. 
 
-Basically, it's Hyper HTTP lib with SmolTCP TCP/IP stack plugged into OpenVPN3 (C++) code, so you can send/receive HTTP packets in userspace without ever interacting with the tun/tap interface of the operating system. With this, you can open multiple OpenVPN connections on Android, for example, where it wouldn't be possible without root. 
+Currently you'll possibly want to use like this
 
-# Cloning
+`async_smoltcp = {git = "https://github.com/lattice0/async_smoltcp", features=["default", "log"]}`
 
-Don't forget to clone recursively
+# TODO: 
 
-```bash
-git clone --recurse-submodules -j8 https://github.com/lattice0/hyper_vpn
-```
-
-# Contributing
-
-Everything is in a draft state so it would be nice to have contributions to organize things
+- bump smoltcp version 
