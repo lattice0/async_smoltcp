@@ -21,7 +21,7 @@ simple_socket = {git = "https://github.com/lattice0/simple_socket", optional=tru
 #Not needed in general, it's just for a personal project that adds VPN support
 simple_vpn = {git = "https://github.com/lattice0/simple_vpn", optional=true}
 #TODO: fix a release version
-smoltcp = {git = "https://github.com/smoltcp-rs/smoltcp", features=["std"], rev = "cb1828cbe6d19b10cb50d3e4323fa8c5ca25e5e4"}
+smoltcp = {git = "https://github.com/smoltcp-rs/smoltcp", features=["std"], rev = "007f8dd2e2d0a770609428aa4b0efb63f5dbb708"}
 rand = "0.8.4"
 #TODO: can I make it depend on net only?
 tokio = { version = "1.4.0", features = ["rt-multi-thread", "macros", "net", "io-util", "rt", "time"], optional=true }

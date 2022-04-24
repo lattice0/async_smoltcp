@@ -1,11 +1,32 @@
+use super::virtual_tun::VirtualTunInterface as VirtualTunDevice;
+#[cfg(feature = "vpn")]
+use super::virtual_tun::{VirtualTunReadError, VirtualTunWriteError};
 use core::task::{Context, Poll, Waker};
-use crossbeam_channel::{unbounded, bounded};
-use crossbeam_channel::{Receiver, Sender, TryRecvError, SendError};
+use crossbeam_channel::{bounded, unbounded};
+use crossbeam_channel::{Receiver, SendError, Sender, TryRecvError};
 use futures::executor::block_on;
 use futures::lock::Mutex as FutMutex;
 #[cfg(feature = "log")]
 #[allow(unused_imports)]
-use log::{debug, error, info, warn, trace};
+use log::{debug, error, info, trace, warn};
+#[cfg(feature = "simple_socket")]
+use simple_socket::{
+    Packet, SocketConnectionError, SocketSendError, SocketType, TcpPacket, UdpPacket,
+};
+#[cfg(feature = "vpn")]
+use simple_vpn::{
+    PhyReceiveError,
+    PhySendError,
+    VpnClient,
+    //VpnConnectionError,VpnDisconnectionError,
+};
+use smoltcp::iface::SocketStorage;
+use smoltcp::iface::{Interface, InterfaceBuilder, Routes, SocketHandle};
+use smoltcp::phy::{Device, Medium, TunTapInterface};
+use smoltcp::socket::Socket;
+use smoltcp::time::Instant;
+pub use smoltcp::wire::IpAddress;
+pub use smoltcp::{Error as SmoltcpError, Result as SmoltcpResult};
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::VecDeque;
@@ -13,36 +34,10 @@ use std::net::SocketAddr;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
-use smoltcp::iface::{Interface, InterfaceBuilder, Routes};
-use smoltcp::socket::SocketRef;
-use smoltcp::time::Instant;
-pub use smoltcp::wire::IpAddress;
-pub use smoltcp::{Error as SmoltcpError, Result as SmoltcpResult};
-
-use super::virtual_tun::{
-    VirtualTunInterface as VirtualTunDevice,
-};
-#[cfg(feature = "vpn")]
-use super::virtual_tun::{
-    VirtualTunReadError, VirtualTunWriteError,
-};
-#[cfg(feature = "simple_socket")]
-use simple_socket::{
-    Packet, SocketConnectionError,
-    SocketSendError, SocketType, TcpPacket, UdpPacket,
-};
-#[cfg(feature = "vpn")]
-use simple_vpn::{
-    PhyReceiveError, PhySendError, VpnClient, 
-    //VpnConnectionError,VpnDisconnectionError,
-};
-use smoltcp::phy::{Device, Medium, TunTapInterface};
 //use smoltcp::phy::TunInterface as TunDevice;
-use smoltcp::socket::{
-    SocketHandle, SocketSet, TcpSocket, TcpSocketBuffer, UdpSocket, UdpSocketBuffer,
-};
+use smoltcp::socket::{TcpSocket, TcpSocketBuffer, UdpSocket, UdpSocketBuffer};
 pub use smoltcp::wire::{IpCidr, IpEndpoint, Ipv4Address, Ipv6Address};
-use std::net::{IpAddr};
+use std::net::IpAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 #[cfg(feature = "async")]
@@ -91,7 +86,7 @@ pub struct SmolStack<DeviceT>
 where
     DeviceT: for<'d> Device<'d>,
 {
-    pub sockets: SocketSet<'static>,
+    //pub sockets: Vec<SocketHandle>,
     pub interface: Interface<'static, DeviceT>,
     //`Sender<Arc<Packet>>` sends data to socket, `Receiver<Arc<Packet>>` received data from socket
     socket_handles: HashMap<
@@ -126,7 +121,7 @@ impl SmolStackWithDevice {
                     block_on(stack.clone().lock()).poll().unwrap();
                     if let Err(_err) = block_on(stack.clone().lock()).spin_all() {
                         #[cfg(feature = "log")]
-                        error!("{:?}",_err);
+                        error!("{:?}", _err);
                     }
                     //TODO: use wake deque future FutMutex or normal FutMutex?
                     /*
@@ -266,6 +261,7 @@ impl SmolStackWithDevice {
         let ip_addrs = ip_addrs.unwrap_or(vec![IpCidr::new(IpAddress::v4(192, 168, 69, 2), 24)]);
         let mut routes = Routes::new(BTreeMap::new());
         //let ip_addrs = ip_addrs.unwrap_or(vec![default_ip_address]);
+
         let default_v4_gateway = default_v4_gateway.unwrap_or(Ipv4Address::new(192, 168, 69, 100));
 
         routes.add_default_ipv4_route(default_v4_gateway).unwrap();
@@ -276,16 +272,15 @@ impl SmolStackWithDevice {
                 default_v6_gateway.unwrap_or(Ipv6Address::new(1, 1, 1, 1, 1, 1, 1, 1));
             routes.add_default_ipv6_route(default_v6_gateway).unwrap();
         }
-
-        let interface = InterfaceBuilder::new(device)
+        let interface = InterfaceBuilder::new(device, vec![])
             .ip_addrs(ip_addrs)
             .routes(routes)
             .finalize();
 
-        let socket_set = SocketSet::new(vec![]);
+        //let socket_set = SocketSet::new(vec![]);
 
         SmolStackWithDevice::Tap(SmolStack {
-            sockets: socket_set,
+            //sockets: socket_set,
             interface: interface,
             socket_handles: HashMap::new(),
             should_stack_thread_stop: Arc::new(AtomicBool::new(false)),
@@ -317,15 +312,15 @@ impl SmolStackWithDevice {
             routes.add_default_ipv6_route(default_v6_gateway).unwrap();
         }
 
-        let interface = InterfaceBuilder::new(device)
+        let interface = InterfaceBuilder::new(device, vec![])
             .ip_addrs(ip_addrs)
             .routes(routes)
             .finalize();
 
-        let socket_set = SocketSet::new(vec![]);
+        //let socket_set = SocketSet::new(vec![]);
 
         SmolStackWithDevice::Tun(SmolStack {
-            sockets: socket_set,
+            //sockets: socket_set,
             interface: interface,
             socket_handles: HashMap::new(),
             should_stack_thread_stop: Arc::new(AtomicBool::new(false)),
@@ -349,23 +344,18 @@ impl SmolStackWithDevice {
         })
     }
 
-    pub fn close_socket(
-        &mut self,
-        socket: SocketHandle
-    ) {
+    pub fn close_socket(&mut self, socket: SocketHandle) {
         choose_device!(self, |stack_| {
-            stack_.sockets.remove(socket);
+            stack_.interface.remove_socket(socket);
         });
     }
 
-    pub fn add_tcp_socket(
-        &mut self,
-    ) -> Result<SmolSocket, ()> {
+    pub fn add_tcp_socket(&mut self) -> Result<SmolSocket, ()> {
         choose_device!(self, |stack_| {
             let rx_buffer = TcpSocketBuffer::new(vec![0; 65000]);
             let tx_buffer = TcpSocketBuffer::new(vec![0; 65000]);
             let socket = TcpSocket::new(rx_buffer, tx_buffer);
-            let handle = stack_.sockets.add(socket);
+            let handle = stack_.interface.add_socket(socket);
 
             let (socket_tx, stack_rx_from_socket) = bounded(MAX_PACKETS_CHANNEL);
             let (stack_tx_to_socket, socket_rx) = bounded(MAX_PACKETS_CHANNEL);
@@ -391,14 +381,12 @@ impl SmolStackWithDevice {
         })
     }
 
-    pub fn add_udp_socket(
-        &mut self,
-    ) -> Result<SmolSocket, ()> {
+    pub fn add_udp_socket(&mut self) -> Result<SmolSocket, ()> {
         choose_device!(self, |stack_| {
             let rx_buffer = UdpSocketBuffer::new(Vec::new(), vec![0; 1024]);
             let tx_buffer = UdpSocketBuffer::new(Vec::new(), vec![0; 1024]);
             let socket = UdpSocket::new(rx_buffer, tx_buffer);
-            let handle = stack_.sockets.add(socket);
+            let handle = stack_.interface.add_socket(socket);
 
             let (socket_tx, stack_rx_from_socket) = unbounded();
             let (stack_tx_to_socket, socket_rx) = unbounded();
@@ -463,9 +451,9 @@ impl SmolStackWithDevice {
         src_port: u16,
     ) -> Result<(), SocketConnectionError> {
         choose_device!(self, |stack| {
-            let mut socket = stack.sockets.get::<TcpSocket>(handle.clone());
+            let (socket, context) = stack.interface.get_socket_and_context::<TcpSocket>(handle.clone());
             socket
-                .connect(addr, src_port)
+                .connect(context, addr, src_port)
                 .map_err(|e| smol_e_connection(e))
         })
     }
@@ -473,7 +461,7 @@ impl SmolStackWithDevice {
     pub fn poll(&mut self) -> SmoltcpResult<bool> {
         choose_device!(self, |stack| {
             let timestamp = Instant::now();
-            match stack.interface.poll(&mut stack.sockets, timestamp) {
+            match stack.interface.poll(timestamp) {
                 Ok(b) => Ok(b),
                 Err(e) => {
                     panic!("{}", e);
@@ -483,34 +471,33 @@ impl SmolStackWithDevice {
     }
 
     pub fn spin_tcp(
-        socket: &mut SocketRef<TcpSocket>,
+        socket: &mut TcpSocket,
         send_to_socket: &Sender<Arc<Packet>>,
         receive_from_socket: &Receiver<Arc<Packet>>,
         waker: &Arc<FutMutex<Option<Waker>>>, //on_tcp_socket_data: OnTcpSocketData,
     ) -> std::result::Result<(), SpinError> {
         if socket.can_recv() {
-            let r = socket
-                .recv(|data| {
-                    let p = Arc::new(Packet::new_tcp(TcpPacket {
-                        data: data.to_vec(),
-                    }));
-                    match send_to_socket.send(p) {
-                        Ok(()) => {},
-                        Err(SendError(_message)) => {
-                            //If we arrived here it probably means the channel got disconnected,
-                            //return Err(SpinError::ClosedSocket);
-                            //return (0, Err(smoltcp::Error::Dropped));
-                            #[cfg(feature = "log")]
-                            error!("spin_tcp: send_to_socket error");
-                        }
+            let r = socket.recv(|data| {
+                let p = Arc::new(Packet::new_tcp(TcpPacket {
+                    data: data.to_vec(),
+                }));
+                match send_to_socket.send(p) {
+                    Ok(()) => {}
+                    Err(SendError(_message)) => {
+                        //If we arrived here it probably means the channel got disconnected,
+                        //return Err(SpinError::ClosedSocket);
+                        //return (0, Err(smoltcp::Error::Dropped));
+                        #[cfg(feature = "log")]
+                        error!("spin_tcp: send_to_socket error");
                     }
-                    block_on(waker.lock()).as_ref().map(|w| w.clone().wake());
-                    (data.len(), ())
-                });
+                }
+                block_on(waker.lock()).as_ref().map(|w| w.clone().wake());
+                (data.len(), ())
+            });
             if let Err(_r) = r {
                 #[cfg(feature = "log")]
                 error!("spin_tcp error: {}", _r);
-            } 
+            }
         }
         if socket.can_send() {
             match receive_from_socket.try_recv() {
@@ -518,15 +505,13 @@ impl SmolStackWithDevice {
                     let p = packet.tcp.as_ref().unwrap().data.as_slice();
                     #[cfg(feature = "log")]
                     debug!("C -> S: {:?}", std::str::from_utf8(p).unwrap());
-                    socket
-                        .send_slice(p)
-                        .map_err(|e| smol_e_send(e)).unwrap();
-                },
+                    socket.send_slice(p).map_err(|e| smol_e_send(e)).unwrap();
+                }
                 Err(TryRecvError::Disconnected) => {
                     #[cfg(feature = "log")]
                     debug!("socket close");
                     socket.close();
-                },
+                }
                 Err(TryRecvError::Empty) => {
                     //#[cfg(feature = "log")]
                     //info!("received empty packet");
@@ -540,7 +525,7 @@ impl SmolStackWithDevice {
     }
 
     pub fn spin_udp(
-        socket: &mut SocketRef<UdpSocket>,
+        socket: &mut UdpSocket,
         send_to_socket: &Sender<Arc<Packet>>,
         receive_from_socket: &Receiver<Arc<Packet>>,
         waker: &Arc<FutMutex<Option<Waker>>>, //on_udp_socket_data: OnUdpSocketData,
@@ -559,7 +544,7 @@ impl SmolStackWithDevice {
                     from_port: port,
                 }));
                 match send_to_socket.send(p) {
-                    Ok(()) => {},
+                    Ok(()) => {}
                     Err(SendError(_message)) => {
                         //If we arrived here it probably means the channel got disconnected,
                         //so let's close this socket
@@ -570,7 +555,6 @@ impl SmolStackWithDevice {
                 }
                 block_on(waker.lock()).as_ref().map(|w| w.clone().wake());
             }
-            
         }
         if socket.can_send() {
             match receive_from_socket.try_recv() {
@@ -582,16 +566,17 @@ impl SmolStackWithDevice {
                     socket
                         .send_slice(s, endpoint.into())
                         .map(|_| s.len())
-                        .map_err(|e| smol_e_send(e)).unwrap();
-                },
+                        .map_err(|e| smol_e_send(e))
+                        //TODO: no uwnrap
+                        .unwrap();
+                }
                 Err(TryRecvError::Disconnected) => {
                     #[cfg(feature = "log")]
                     debug!("socket close");
                     socket.close();
-                },
+                }
                 Err(TryRecvError::Empty) => {}
             }
-
         } else {
             #[cfg(feature = "log")]
             trace!("socket cannot send");
@@ -617,7 +602,7 @@ impl SmolStackWithDevice {
                     .unwrap();
                 match socket_type {
                     SocketType::TCP => {
-                        let mut socket = stack.sockets.get::<TcpSocket>(smol_socket_handle.clone());
+                        let (mut socket, context) = stack.interface.get_socket_and_context::<TcpSocket>(smol_socket_handle.clone());
                         let s = SmolStackWithDevice::spin_tcp(
                             &mut socket,
                             send_to_socket,
@@ -632,7 +617,7 @@ impl SmolStackWithDevice {
                         }
                     }
                     SocketType::UDP => {
-                        let mut socket = stack.sockets.get::<UdpSocket>(smol_socket_handle.clone());
+                        let (mut socket, context) = stack.interface.get_socket_and_context::<UdpSocket>(smol_socket_handle.clone());
                         let s = SmolStackWithDevice::spin_udp(
                             &mut socket,
                             send_to_socket,
@@ -675,7 +660,7 @@ impl AsyncRead for SmolSocket {
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
         let channel = match &self.channel {
-            Some((a, b)) => (a,b),
+            Some((a, b)) => (a, b),
             None => {
                 //If I'm right this should never arrive
                 panic!("this should't have happen, I guess");
@@ -690,12 +675,12 @@ impl AsyncRead for SmolSocket {
                     std::str::from_utf8(&packet.tcp.as_ref().unwrap().data.as_slice()).unwrap()
                 );
                 packet
-            },
+            }
             Err(TryRecvError::Empty) => {
                 //blocking here is no big deal since it's just to replace the variable. Very fast
                 block_on(self.waker.lock()).replace(cx.waker().clone());
                 return Poll::Pending;
-            },
+            }
             Err(TryRecvError::Disconnected) => {
                 //TODO: return what in this case?
                 block_on(self.waker.lock()).replace(cx.waker().clone());
@@ -742,14 +727,15 @@ impl AsyncWrite for SmolSocket {
         buf: &[u8],
     ) -> Poll<Result<usize, std::io::Error>> {
         let channel = match &self.channel {
-            Some((a, b)) => (a,b),
+            Some((a, b)) => (a, b),
             None => {
                 return Poll::Ready(Ok(0));
             }
         };
         channel
             .0
-            .send(Arc::new(Packet::new_tcp(TcpPacket { data: buf.to_vec() }))).unwrap();
+            .send(Arc::new(Packet::new_tcp(TcpPacket { data: buf.to_vec() })))
+            .unwrap();
         Poll::Ready(Ok(buf.len()))
     }
 
@@ -770,14 +756,14 @@ impl AsyncWrite for SmolSocket {
 fn smol_e_send(e: smoltcp::Error) -> SocketSendError {
     match e {
         smoltcp::Error::Exhausted => SocketSendError::Exhausted,
-        _ => SocketSendError::Unknown(format!("{}", e))
+        _ => SocketSendError::Unknown(format!("{}", e)),
     }
 }
 
 fn smol_e_connection(e: smoltcp::Error) -> SocketConnectionError {
     match e {
         smoltcp::Error::Exhausted => SocketConnectionError::Exhausted,
-        _ => SocketConnectionError::Unknown(format!("{}", e))
+        _ => SocketConnectionError::Unknown(format!("{}", e)),
     }
 }
 
