@@ -1,0 +1,44 @@
+[package]
+name = "async_smoltcp"
+version = "0.1.0"
+authors = ["Lattice0"]
+edition = "2021"
+
+[features]
+default = ["tap", "tun", "async", "tcp", "udp"]
+vpn = ["smoltcp/medium-ip", "smoltcp/medium-ethernet", "simple_socket", "simple_vpn"]
+tap = ["smoltcp/medium-ethernet", "smoltcp/phy-tuntap_interface"]
+tun = ["smoltcp/medium-ip", "smoltcp/phy-tuntap_interface", "simple_socket"]
+tcp = ["smoltcp/socket-tcp", "simple_socket"]
+udp = ["smoltcp/socket-udp", "simple_socket"]
+packet_log = ["etherparse", "log"]
+
+async = ["tokio"]
+
+[dependencies]
+#simple_socket = {path="../simple_socket", optional=true}
+simple_socket = {git = "https://github.com/lattice0/simple_socket", optional=true}
+#Not needed in general, it's just for a personal project that adds VPN support
+simple_vpn = {git = "https://github.com/lattice0/simple_vpn", optional=true}
+#TODO: fix a release version
+smoltcp = {git = "https://github.com/smoltcp-rs/smoltcp", features=["std"], rev = "007f8dd2e2d0a770609428aa4b0efb63f5dbb708"}
+rand = "0.8.4"
+#TODO: can I make it depend on net only?
+tokio = { version = "1.4.0", features = ["rt-multi-thread", "macros", "net", "io-util", "rt", "time"], optional=true }
+futures = { version="0.3.13", default-features = false, features = ["std", "executor"] }
+log = { version="0.4.14", default-features = false, optional=true }
+crossbeam-channel = "0.5.1"
+etherparse = {version="0.9.0", optional=true}
+
+[dev-dependencies]
+getopts = "0.2"
+hyper = {version = "0.14", features = ["full"]}
+env_logger = "0.8.3"
+
+[[example]]
+name="sync_tun"
+required-features=["default", "log"]
+
+[[example]]
+name="async_tun"
+required-features=["default", "log"]
