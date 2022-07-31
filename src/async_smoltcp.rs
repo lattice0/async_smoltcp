@@ -600,7 +600,7 @@ impl SmolStackWithDevice {
                     .unwrap();
                 match socket_type {
                     SocketType::TCP => {
-                        let (mut socket, context) = stack.interface.get_socket_and_context::<TcpSocket>(smol_socket_handle.clone());
+                        let (mut socket, _context) = stack.interface.get_socket_and_context::<TcpSocket>(smol_socket_handle.clone());
                         let s = SmolStackWithDevice::spin_tcp(
                             &mut socket,
                             send_to_socket,
