@@ -20,10 +20,8 @@ use simple_vpn::{
     VpnClient,
     //VpnConnectionError,VpnDisconnectionError,
 };
-use smoltcp::iface::SocketStorage;
 use smoltcp::iface::{Interface, InterfaceBuilder, Routes, SocketHandle};
 use smoltcp::phy::{Device, Medium, TunTapInterface};
-use smoltcp::socket::Socket;
 use smoltcp::time::Instant;
 pub use smoltcp::wire::IpAddress;
 pub use smoltcp::{Error as SmoltcpError, Result as SmoltcpResult};
@@ -617,7 +615,7 @@ impl SmolStackWithDevice {
                         }
                     }
                     SocketType::UDP => {
-                        let (mut socket, context) = stack.interface.get_socket_and_context::<UdpSocket>(smol_socket_handle.clone());
+                        let (mut socket, _context) = stack.interface.get_socket_and_context::<UdpSocket>(smol_socket_handle.clone());
                         let s = SmolStackWithDevice::spin_udp(
                             &mut socket,
                             send_to_socket,
